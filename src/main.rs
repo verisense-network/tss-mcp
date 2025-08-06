@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use hex::ToHex;
 use rmcp::{
-    ErrorData, Json, RmcpError, RoleServer, ServerHandler,
+    ErrorData, Json, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::Parameters, wrapper},
     model::{
         Implementation, InitializeRequestParam, InitializeResult, ProtocolVersion,
@@ -104,17 +104,16 @@ impl Default for TssServer {
         Self::new().unwrap()
     }
 }
-
+use load_dotenv::load_dotenv;
+load_dotenv!();
 #[tool_router(router = tool_router)]
 impl TssServer {
     pub fn new() -> Result<Self, String> {
         let node = Node::<VrsTssValidatorIdentity>::new(
             TssKeystore::random_generate_keypair(),
             PathBuf::from(".tss_node"),
-            "/ip4/34.71.144.40/tcp/12944".parse().unwrap(),
-            "12D3KooWFcGs16mdf3HuNd2KMx5WYNsDyyDVz9h6Udg6WWg3CCxh"
-                .parse()
-                .unwrap(),
+            format!("/ip4/{}/tcp/12944", env!("IP")).parse().unwrap(),
+            env!("PEER_ID").parse().unwrap(),
         )
         .map_err(|e| e.to_string())?;
         Ok(Self {
@@ -152,8 +151,8 @@ impl TssServer {
     pub async fn sign(
         &self,
         params: Parameters<SignRequest>,
-    ) -> Result<Json<SignResponse>, String> {
-        let tweak_data = hex::decode(params.0.tweak_data).map_err(|e| e.to_string())?;
+    ) -> Result<Json<SignResponse>, ErrorData> {
+        let tweak_data = params.0.tweak_data.into_bytes();
         let message_hash = sha2::Sha256::digest(&params.0.message.as_bytes()).to_vec();
         let signature = sign(
             self.node.clone(),
@@ -162,7 +161,8 @@ impl TssServer {
             tweak_data,
             params.0.timeout_secs.map(Duration::from_secs),
         )
-        .await?;
+        .await
+        .map_err(|e| ErrorData::invalid_params(e, None))?;
         Ok(wrapper::Json(SignResponse {
             message_hash_hex: message_hash.encode_hex::<String>(),
             signature_hex: signature,
@@ -251,7 +251,24 @@ pub async fn sign(
         Ok(signature.signature().encode_hex::<String>())
     }
 }
-
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("install Ctrl+C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{SignalKind, signal};
+        signal(SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! { _ = ctrl_c => {}, _ = terminate => {} }
+}
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -271,161 +288,7 @@ async fn main() -> anyhow::Result<()> {
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:8000").await?;
     let _ = axum::serve(tcp_listener, router)
-        .with_graceful_shutdown(async { tokio::signal::ctrl_c().await.unwrap() })
+        .with_graceful_shutdown(shutdown_signal())
         .await;
     Ok(())
 }
-
-// #[tokio::main]
-// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//     env_logger::init();
-
-//     let tss_server = Arc::new(TssServer::new());
-
-//     let server = ServerBuilder::new()
-//         .with_name("VeriSense TSS MCP Server")
-//         .with_version("0.1.0")
-//         .with_tools(move |_req: &Request| {
-//             let tools = vec![
-//                 Tool {
-//                     info: ToolInfo {
-//                         name: "get_public_key".to_string(),
-//                         description: Some(
-//                             "Get a threshold signature scheme public key".to_string(),
-//                         ),
-//                         input_schema: CallSchema {
-//                             schema_type: CallSchemaType::Object,
-//                             properties: Some(CallSchemaProperties {
-//                                 crypto_type: Some(CallSchema {
-//                                     schema_type: CallSchemaType::String,
-//                                     description: Some(
-//                                         "Crypto type: ecdsa_secp256k1, ecdsa_secp256r1, ed25519, bls12_381 (default: ecdsa_secp256k1)".to_string(),
-//                                     ),
-//                                     ..Default::default()
-//                                 }),
-//                                 tweak_data: Some(CallSchema {
-//                                     schema_type: CallSchemaType::String,
-//                                     description: Some(
-//                                         "Tweak data for key derivation (default: 'default')".to_string(),
-//                                     ),
-//                                     ..Default::default()
-//                                 }),
-//                                 timeout_secs: Some(CallSchema {
-//                                     schema_type: CallSchemaType::Number,
-//                                     description: Some(
-//                                         "Timeout in seconds (default: 30)".to_string(),
-//                                     ),
-//                                     ..Default::default()
-//                                 }),
-//                             }),
-//                             ..Default::default()
-//                         },
-//                     },
-//                 },
-//                 Tool {
-//                     info: ToolInfo {
-//                         name: "sign".to_string(),
-//                         description: Some(
-//                             "Sign a message using threshold signature scheme".to_string(),
-//                         ),
-//                         input_schema: CallSchema {
-//                             schema_type: CallSchemaType::Object,
-//                             properties: Some(CallSchemaProperties {
-//                                 message: Some(CallSchema {
-//                                     schema_type: CallSchemaType::String,
-//                                     description: Some(
-//                                         "Message to sign (string or hex)".to_string(),
-//                                     ),
-//                                     required: Some(vec!["message".to_string()]),
-//                                     ..Default::default()
-//                                 }),
-//                                 crypto_type: Some(CallSchema {
-//                                     schema_type: CallSchemaType::String,
-//                                     description: Some(
-//                                         "Crypto type: ecdsa_secp256k1, ecdsa_secp256r1, ed25519, bls12_381 (default: ecdsa_secp256k1)".to_string(),
-//                                     ),
-//                                     ..Default::default()
-//                                 }),
-//                                 hash_message: Some(CallSchema {
-//                                     schema_type: CallSchemaType::Boolean,
-//                                     description: Some(
-//                                         "Whether to hash the message with Keccak256 (default: true)".to_string(),
-//                                     ),
-//                                     ..Default::default()
-//                                 }),
-//                                 tweak_data: Some(CallSchema {
-//                                     schema_type: CallSchemaType::String,
-//                                     description: Some(
-//                                         "Tweak data for key derivation (default: 'default')".to_string(),
-//                                     ),
-//                                     ..Default::default()
-//                                 }),
-//                                 timeout_secs: Some(CallSchema {
-//                                     schema_type: CallSchemaType::Number,
-//                                     description: Some(
-//                                         "Timeout in seconds (default: 30)".to_string(),
-//                                     ),
-//                                     ..Default::default()
-//                                 }),
-//                             }),
-//                             required: Some(vec!["message".to_string()]),
-//                             ..Default::default()
-//                         },
-//                     },
-//                 },
-//             ];
-//             Ok(ToolsList { tools })
-//         })
-//         .with_call_tool({
-//             let tss_server = Arc::clone(&tss_server);
-//             move |call: Call| {
-//                 let tss_server = Arc::clone(&tss_server);
-//                 Box::pin(async move {
-//                     let result = match call.tool.as_str() {
-//                         "get_public_key" => {
-//                             tss_server
-//                                 .handle_get_public_key(call.arguments)
-//                                 .await
-//                                 .map_err(|e| rmcp::types::Error {
-//                                     code: -32603,
-//                                     message: e,
-//                                     data: None,
-//                                 })?
-//                         }
-//                         "sign" => {
-//                             tss_server
-//                                 .handle_sign(call.arguments)
-//                                 .await
-//                                 .map_err(|e| rmcp::types::Error {
-//                                     code: -32603,
-//                                     message: e,
-//                                     data: None,
-//                                 })?
-//                         }
-//                         _ => {
-//                             return Err(rmcp::types::Error {
-//                                 code: -32601,
-//                                 message: format!("Unknown tool: {}", call.tool),
-//                                 data: None,
-//                             })
-//                         }
-//                     };
-
-//                     Ok(vec![Content {
-//                         content_type: "text".to_string(),
-//                         text: Some(serde_json::to_string_pretty(&result).unwrap()),
-//                         ..Default::default()
-//                     }])
-//                 })
-//             }
-//         })
-//         .build();
-
-//     let server = Server::new(server);
-//     let transport = rmcp::transports::stdio::StdioTransport::new();
-
-//     println!("VeriSense TSS MCP Server starting...");
-//     server.run(transport).await?;
-
-//     Ok(())
-// }

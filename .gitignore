@@ -3,3 +3,5 @@
 Cargo.lock
 .test_node/
 *.pdb
+.claude
+.env

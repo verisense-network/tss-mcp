@@ -53,3 +53,5 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 
 axum = { version = "0.8", features = ["macros"] }
+load-env = "0.3.0"
+load-dotenv = "0.1.2"
