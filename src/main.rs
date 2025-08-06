@@ -1,56 +1,65 @@
 mod testing;
+use serde::{Deserialize, Serialize};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 pub use tss_sdk::*;
 mod identity;
-mod mock;
 pub use identity::*;
 use std::path::PathBuf;
 
 use hex::ToHex;
 use rmcp::{
-    Json, ServiceExt,
+    ErrorData, Json, RmcpError, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::Parameters, wrapper},
+    model::{
+        Implementation, InitializeRequestParam, InitializeResult, ProtocolVersion,
+        ServerCapabilities, ServerInfo,
+    },
+    service::RequestContext,
     tool, tool_handler, tool_router,
-    transport::stdio,
+    transport::{
+        StreamableHttpService, streamable_http_server::session::local::LocalSessionManager,
+    },
 };
 use std::sync::Arc;
 use tokio::time::Duration;
 use tss_sdk::crypto::CryptoType;
 use tss_sdk::node::Node;
 
-use serde_json::{Value, json};
-use sha3::{Digest, Keccak256};
-use tokio::sync::RwLock;
+use sha3::Digest;
 use tss_sdk::crypto::ValidatorIdentityKeypair;
 
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GetPublicKeyRequest {
     #[schemars(description = "Crypto type")]
     pub crypto_type: CryptoTypeEnum,
     #[schemars(description = "Tweak data for key derivation")]
-    pub tweak_hex: String,
+    pub tweak_data: String,
     #[schemars(description = "Timeout in seconds")]
     pub timeout_secs: Option<u64>,
 }
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GetPublicKeyResponse {
     pub public_key_hex: String,
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use schemars::schema_for;
+    #[test]
+    fn test() {
+        let schema = schema_for!(GetPublicKeyRequest);
+        println!("{}", serde_json::to_string_pretty(&schema).unwrap());
+    }
+}
 
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum CryptoTypeEnum {
-    #[schemars(description = "P256")]
     P256,
-    #[schemars(description = "Ed25519")]
     Ed25519,
-    #[schemars(description = "Secp256k1")]
     Secp256k1,
-    #[schemars(description = "Secp256k1Taproot")]
     Secp256k1Tr,
-    #[schemars(description = "Ed448")]
     Ed448,
-    #[schemars(description = "Ristretto255")]
     Ristretto255,
-    #[schemars(description = "EcdsaSecp256k1")]
     EcdsaSecp256k1,
 }
 impl From<CryptoTypeEnum> for CryptoType {
@@ -66,7 +75,7 @@ impl From<CryptoTypeEnum> for CryptoType {
         }
     }
 }
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SignRequest {
     #[schemars(description = "Crypto type")]
     pub crypto_type: CryptoTypeEnum,
@@ -77,7 +86,7 @@ pub struct SignRequest {
     #[schemars(description = "Timeout in seconds")]
     pub timeout_secs: Option<u64>,
 }
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SignResponse {
     #[schemars(description = "Hash of the message")]
     pub message_hash_hex: String,
@@ -90,8 +99,6 @@ pub struct TssServer {
     tool_router: ToolRouter<TssServer>,
 }
 
-#[tool_handler(router = self.tool_router)]
-impl rmcp::ServerHandler for TssServer {}
 impl Default for TssServer {
     fn default() -> Self {
         Self::new().unwrap()
@@ -122,15 +129,18 @@ impl TssServer {
     pub async fn get_public_key(
         &self,
         params: Parameters<GetPublicKeyRequest>,
-    ) -> Result<Json<GetPublicKeyResponse>, String> {
-        let tweak_data = hex::decode(params.0.tweak_hex).map_err(|e| e.to_string())?;
+    ) -> Result<Json<GetPublicKeyResponse>, ErrorData> {
+        let tweak_data = params.0.tweak_data.into_bytes();
         let public_key = get_public_key(
             self.node.clone(),
-            params.0.crypto_type.into(),
+            // params.0.crypto_type.into(),
+            CryptoType::P256,
             tweak_data,
             params.0.timeout_secs.map(Duration::from_secs),
         )
-        .await?;
+        .await
+        .map_err(|e| ErrorData::invalid_params(e, None))?;
+        tracing::info!("{:?}", public_key);
         Ok(wrapper::Json(GetPublicKeyResponse {
             public_key_hex: public_key,
         }))
@@ -157,6 +167,33 @@ impl TssServer {
             message_hash_hex: message_hash.encode_hex::<String>(),
             signature_hex: signature,
         }))
+    }
+}
+
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for TssServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            protocol_version: ProtocolVersion::V_2025_03_26,
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+            server_info: Implementation::from_build_env(),
+            instructions: Some("This server provides a threshold signature scheme tool that can get public key and sign message.".to_string()),
+        }
+    }
+
+    async fn initialize(
+        &self,
+        _request: InitializeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, rmcp::ErrorData> {
+        if let Some(http_request_part) = context.extensions.get::<axum::http::request::Parts>() {
+            let initialize_headers = &http_request_part.headers;
+            let initialize_uri = &http_request_part.uri;
+            tracing::info!(?initialize_headers, %initialize_uri, "initialize from http server");
+        }
+        Ok(self.get_info())
     }
 }
 
@@ -216,11 +253,27 @@ pub async fn sign(
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    Ok(())
-    // env_logger::init();
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "debug".to_string().into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
-    // let tss_server = Arc::new(TssServer::new()?);
+    let service = StreamableHttpService::new(
+        || TssServer::new().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)),
+        LocalSessionManager::default().into(),
+        Default::default(),
+    );
+
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:8000").await?;
+    let _ = axum::serve(tcp_listener, router)
+        .with_graceful_shutdown(async { tokio::signal::ctrl_c().await.unwrap() })
+        .await;
+    Ok(())
 }
 
 // #[tokio::main]
