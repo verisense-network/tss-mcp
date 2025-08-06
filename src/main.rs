@@ -139,7 +139,6 @@ impl TssServer {
         )
         .await
         .map_err(|e| ErrorData::invalid_params(e, None))?;
-        tracing::info!("{:?}", public_key);
         Ok(wrapper::Json(GetPublicKeyResponse {
             public_key_hex: public_key,
         }))
@@ -286,7 +285,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let router = axum::Router::new().nest_service("/mcp", service);
-    let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:8000").await?;
+    let tcp_listener = tokio::net::TcpListener::bind("0.0.0.0:80").await?;
     let _ = axum::serve(tcp_listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await;
