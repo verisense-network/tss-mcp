@@ -63,47 +63,41 @@ pub async fn sign(
         Ok(signature.signature().encode_hex::<String>())
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use sha3::{Digest, Keccak256};
-    use sp_core::crypto::AccountId32;
-    use sp_core::crypto::KeyTypeId;
-    use sp_core::crypto::Pair as CryptoPair;
-    use sp_core::sr25519::{Pair, Public, Signature};
-    use sp_keystore::KeystorePtr;
-    use std::path::Path;
     use tss_sdk::crypto::ValidatorIdentityKeypair;
-    #[tokio::test]
-    async fn test_node_runtime() {
-        let node = Node::<crate::VrsTssValidatorIdentity>::new(
-            crate::TssKeystore::random_generate_keypair(),
-            PathBuf::from(".test_node"),
-            "/ip4/34.71.144.40/tcp/12944".parse().unwrap(),
-            "12D3KooWFcGs16mdf3HuNd2KMx5WYNsDyyDVz9h6Udg6WWg3CCxh"
-                .parse()
-                .unwrap(),
-        )
-        .unwrap();
-        let node = Arc::new(node);
-        let public_key = get_public_key(
-            node.clone(),
-            CryptoType::EcdsaSecp256k1,
-            b"test".to_vec(),
-            Some(Duration::from_secs(10)),
-        )
-        .await
-        .unwrap();
-        println!("public_key: {:?}", public_key);
-        let signature = sign(
-            node.clone(),
-            CryptoType::EcdsaSecp256k1,
-            Keccak256::digest(b"test").to_vec(),
-            b"test".to_vec(),
-            Some(Duration::from_secs(10)),
-        )
-        .await
-        .unwrap();
-        println!("signature: {:?}", signature);
-    }
+    
+    let node = Node::<crate::VrsTssValidatorIdentity>::new(
+        crate::TssKeystore::random_generate_keypair(),
+        PathBuf::from(".test_node"),
+        "/ip4/34.71.144.40/tcp/12944".parse().unwrap(),
+        "12D3KooWFcGs16mdf3HuNd2KMx5WYNsDyyDVz9h6Udg6WWg3CCxh"
+            .parse()
+            .unwrap(),
+    )?;
+    let node = Arc::new(node);
+    
+    println!("Getting public key...");
+    let public_key = get_public_key(
+        node.clone(),
+        CryptoType::EcdsaSecp256k1,
+        b"test".to_vec(),
+        Some(Duration::from_secs(10)),
+    )
+    .await?;
+    println!("Public key: {:?}", public_key);
+    
+    println!("Signing message...");
+    let signature = sign(
+        node.clone(),
+        CryptoType::EcdsaSecp256k1,
+        Keccak256::digest(b"test").to_vec(),
+        b"test".to_vec(),
+        Some(Duration::from_secs(10)),
+    )
+    .await?;
+    println!("Signature: {:?}", signature);
+    
+    Ok(())
 }
