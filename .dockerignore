@@ -1,0 +1,14 @@
+target
+.git
+.gitignore
+.github
+Dockerfile
+**/*.rs.bk
+**/*.log
+**/*.tmp
+.DS_Store
+node_modules
+venv
+.env
+
+

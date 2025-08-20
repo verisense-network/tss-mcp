@@ -102,16 +102,17 @@ impl Default for TssServer {
         Self::new().unwrap()
     }
 }
-use load_dotenv::load_dotenv;
-load_dotenv!();
 #[tool_router(router = tool_router)]
 impl TssServer {
     pub fn new() -> Result<Self, String> {
+        let ip = std::env::var("IP").map_err(|e| format!("missing IP env var: {}", e))?;
+        let peer_id =
+            std::env::var("PEER_ID").map_err(|e| format!("missing PEER_ID env var: {}", e))?;
         let node = Node::<VrsTssValidatorIdentity>::new(
             TssKeystore::random_generate_keypair(),
-            PathBuf::from(".tss_node"),
-            format!("/ip4/{}/tcp/12944", env!("IP")).parse().unwrap(),
-            env!("PEER_ID").parse().unwrap(),
+            PathBuf::from(std::env::var("NODE_DIR").unwrap_or(".tss_node".to_string())),
+            format!("/ip4/{}/tcp/12944", ip).parse().unwrap(),
+            peer_id.parse().unwrap(),
         )
         .map_err(|e| e.to_string())?;
         Ok(Self {
@@ -286,7 +287,12 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let router = axum::Router::new().nest_service("/mcp", service);
-    let tcp_listener = tokio::net::TcpListener::bind("0.0.0.0:80").await?;
+    let port: u16 = std::env::var("PORT")
+        .unwrap_or_else(|_| "8080".to_string())
+        .parse()
+        .unwrap_or(8080);
+    let bind_addr = format!("0.0.0.0:{}", port);
+    let tcp_listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     let _ = axum::serve(tcp_listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await;

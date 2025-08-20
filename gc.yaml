@@ -1,0 +1,10 @@
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    env: ["DOCKER_BUILDKIT=1"]
+    args: ["build", "-t", "us-central1-docker.pkg.dev/beta-testnet-20250403/mcp/tss-mcp:latest", "."]
+images:
+  - "us-central1-docker.pkg.dev/beta-testnet-20250403/mcp/tss-mcp:latest"
+
+options:
+  machineType: "E2_HIGHCPU_8" # 或 N1_HIGHCPU_8
+  diskSizeGb: 100
