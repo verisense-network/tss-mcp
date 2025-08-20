@@ -30,8 +30,10 @@ use tss_sdk::crypto::ValidatorIdentityKeypair;
 
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GetPublicKeyRequest {
-    #[schemars(description = "Crypto type")]
-    pub crypto_type: CryptoTypeEnum,
+    #[schemars(
+        description = "Crypto type, e.g. P256, Ed25519, Secp256k1, Secp256k1Tr, Ed448, Ristretto255, EcdsaSecp256k1"
+    )]
+    pub crypto_type: String,
     #[schemars(description = "Tweak data for key derivation")]
     pub tweak_data: String,
     #[schemars(description = "Timeout in seconds")]
@@ -51,34 +53,25 @@ mod tests {
         println!("{}", serde_json::to_string_pretty(&schema).unwrap());
     }
 }
-
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub enum CryptoTypeEnum {
-    P256,
-    Ed25519,
-    Secp256k1,
-    Secp256k1Tr,
-    Ed448,
-    Ristretto255,
-    EcdsaSecp256k1,
-}
-impl From<CryptoTypeEnum> for CryptoType {
-    fn from(value: CryptoTypeEnum) -> Self {
-        match value {
-            CryptoTypeEnum::P256 => CryptoType::P256,
-            CryptoTypeEnum::Ed25519 => CryptoType::Ed25519,
-            CryptoTypeEnum::Secp256k1 => CryptoType::Secp256k1,
-            CryptoTypeEnum::Secp256k1Tr => CryptoType::Secp256k1Tr,
-            CryptoTypeEnum::Ed448 => CryptoType::Ed448,
-            CryptoTypeEnum::Ristretto255 => CryptoType::Ristretto255,
-            CryptoTypeEnum::EcdsaSecp256k1 => CryptoType::EcdsaSecp256k1,
-        }
+fn get_crypto_type(crypto_type: String) -> CryptoType {
+    let normalized = crypto_type.to_lowercase().replace("-", "").replace("_", "");
+    match normalized.as_str() {
+        "p256" => CryptoType::P256,
+        "ed25519" => CryptoType::Ed25519,
+        "secp256k1" => CryptoType::Secp256k1,
+        "secp256k1tr" | "secp256k1taproot" | "taproot" => CryptoType::Secp256k1Tr,
+        "ed448" => CryptoType::Ed448,
+        "ristretto255" => CryptoType::Ristretto255,
+        "ecdsasecp256k1" => CryptoType::EcdsaSecp256k1,
+        _ => CryptoType::P256,
     }
 }
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SignRequest {
-    #[schemars(description = "Crypto type")]
-    pub crypto_type: CryptoTypeEnum,
+    #[schemars(
+        description = "Crypto type, e.g. P256, Ed25519, Secp256k1, Secp256k1Tr, Ed448, Ristretto255, EcdsaSecp256k1"
+    )]
+    pub crypto_type: String,
     #[schemars(description = "Message to sign")]
     pub message: String,
     #[schemars(description = "Tweak data for key derivation")]
@@ -132,8 +125,7 @@ impl TssServer {
         let tweak_data = params.0.tweak_data.into_bytes();
         let public_key = get_public_key(
             self.node.clone(),
-            // params.0.crypto_type.into(),
-            CryptoType::P256,
+            get_crypto_type(params.0.crypto_type),
             tweak_data,
             params.0.timeout_secs.map(Duration::from_secs),
         )
@@ -155,7 +147,7 @@ impl TssServer {
         let message_hash = sha2::Sha256::digest(&params.0.message.as_bytes()).to_vec();
         let signature = sign(
             self.node.clone(),
-            params.0.crypto_type.into(),
+            get_crypto_type(params.0.crypto_type),
             message_hash.clone(),
             tweak_data,
             params.0.timeout_secs.map(Duration::from_secs),
