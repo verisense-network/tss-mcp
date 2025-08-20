@@ -41,6 +41,9 @@ pub struct GetPublicKeyRequest {
 }
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GetPublicKeyResponse {
+    #[schemars(description = "Crypto type")]
+    pub crypto_type: String,
+    #[schemars(description = "Public key")]
     pub public_key_hex: String,
 }
 #[cfg(test)]
@@ -81,6 +84,8 @@ pub struct SignRequest {
 }
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SignResponse {
+    #[schemars(description = "Crypto type")]
+    pub crypto_type: String,
     #[schemars(description = "Hash of the message")]
     pub message_hash_hex: String,
     #[schemars(description = "Signature")]
@@ -123,15 +128,17 @@ impl TssServer {
         params: Parameters<GetPublicKeyRequest>,
     ) -> Result<Json<GetPublicKeyResponse>, ErrorData> {
         let tweak_data = params.0.tweak_data.into_bytes();
+        let crypto_type = get_crypto_type(params.0.crypto_type.clone());
         let public_key = get_public_key(
             self.node.clone(),
-            get_crypto_type(params.0.crypto_type),
+            crypto_type,
             tweak_data,
             params.0.timeout_secs.map(Duration::from_secs),
         )
         .await
         .map_err(|e| ErrorData::invalid_params(e, None))?;
         Ok(wrapper::Json(GetPublicKeyResponse {
+            crypto_type: crypto_type.to_string(),
             public_key_hex: public_key,
         }))
     }
@@ -145,9 +152,10 @@ impl TssServer {
     ) -> Result<Json<SignResponse>, ErrorData> {
         let tweak_data = params.0.tweak_data.into_bytes();
         let message_hash = sha2::Sha256::digest(&params.0.message.as_bytes()).to_vec();
+        let crypto_type = get_crypto_type(params.0.crypto_type.clone());
         let signature = sign(
             self.node.clone(),
-            get_crypto_type(params.0.crypto_type),
+            crypto_type,
             message_hash.clone(),
             tweak_data,
             params.0.timeout_secs.map(Duration::from_secs),
@@ -155,6 +163,7 @@ impl TssServer {
         .await
         .map_err(|e| ErrorData::invalid_params(e, None))?;
         Ok(wrapper::Json(SignResponse {
+            crypto_type: crypto_type.to_string(),
             message_hash_hex: message_hash.encode_hex::<String>(),
             signature_hex: signature,
         }))
